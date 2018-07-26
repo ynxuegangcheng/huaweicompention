@@ -1,0 +1,779 @@
+
+
+package com.elasticcloudservice.predict;
+
+import java.io.DataInputStream;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.Vector;
+
+import javax.swing.text.html.Option;
+
+class date{
+    int year;
+    int month;
+    int day;
+}
+
+class flavor{
+    String VM_Name;
+    int VM_CPU_Kernel;
+    int VM_Memory;
+    int VM_Amounts;
+}
+
+class server{
+    int S_CPU_kernels;
+    int S_Memory;
+    int S_Harddesk;
+    ArrayList<String> VM_Names = new ArrayList<String>();
+    ArrayList<Integer> Nums = new ArrayList<Integer>();
+}
+
+public class Predict {
+    static double arf = 0.99;
+
+    static boolean flags = false;                          //标志位，表示服务器是否填满，true:满，false:可以继续填
+    static boolean flags2 = false;
+
+    static String out = new String() ;
+    static int VM_Type_Amounts=0;                          //虚拟机（Virtual Machine,VM）类型数
+    static String Option;                                  //优化选项（CPU、MEM）
+    static date Start;                               //预测开始与结束时间
+    static date Stop;
+    static int Pre_VM_Amounts;                             //预测虚拟机使用总数
+    static ArrayList<flavor> Flavors = new ArrayList<flavor>();                      //各虚拟机信息集合
+    static ArrayList<flavor> Flavors2 = new ArrayList<flavor>();
+    static ArrayList<server> Ser = new ArrayList<server>();                          //服务器集
+    static ArrayList<ArrayList<Integer>> Data = new ArrayList<ArrayList<Integer>>();             //存储的训练数据集
+    static server Sas=new server();                                     //标准的服务器，用于复制创建新的完整的服务器
+    static int data_intervel = 0;                          //测试集数据的时间间隔（实际天数减1，方便数组填数）
+    static int pre_intervel = 0;                           //需要预测的时间间隔
+    static int server_num = 0;                             //需要使用的服务器总数
+    static int locate = 0;                                 //读取测试数据集的一个位置信息，加快读数
+    static int Number[] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};    //flavor1到flavor15
+    static int days1[] = {31,28,31,30,31,30,31,31,30,31,30,31};                                    //正常每月天数
+    static int days2[] = {31,29,31,30,31,30,31,31,30,31,30,31};                                    //闰年每月天数
+    static int days3[] = {366,365,365,365};
+    static double ar[] = { 1.22,1.15,1.0,1.0,1.1,0.9,1.1,1.22,1.21,1.1,1.19,1.1,1.1,1.1,1.1 };
+
+    //	void predict_server(char[][] info, char[][] data, int data_num, char filename){
+//		get_info(info);
+//		get_data(data, data_num);
+//		predict(data, data_num);
+//		distribute();
+//		String result = output();
+//
+//	}
+    public static String[] predictVm(String[] ecsContent, String[] inputContent) {
+        String[] results = new String[ecsContent.length];
+//		for (int i = 0; i < results.length; i++) {
+        char[][] info = convToArray(inputContent);
+        char[][] data = convToArray(ecsContent);
+        int data_num = ecsContent.length;
+        get_info(info);
+        get_data(data, data_num);
+//      predict(data, data_num);
+        predict();
+        distribute(0);
+        String result = output();
+        results = result.split("\n");
+//		}
+        return results;
+    }
+
+    static char[][] convToArray(String[] stringArray){
+        char[][] chararray = new char[10000][];
+        for (int i = 0; i < stringArray.length; i++) {
+            chararray[i] = stringArray[i].toCharArray();
+        }
+        return chararray;
+    }
+
+    static String output(){
+//		String out = new String() ;
+
+//		out += itostr(Pre_VM_Amounts);
+//		out += '\n';
+//		for (int i = 0; i < VM_Type_Amounts; i++) {
+//			out += Flavors2.get(i).VM_Name;
+//			out += ' ';
+//			out += itostr(Flavors2.get(i).VM_Amounts);
+//			out += '\n';
+//		}
+
+        out += '\n';
+        out += itostr(server_num);
+        out += '\n';
+
+        for (int i = 1; i <= server_num; i++) {
+            out += itostr(i);
+            for (int j = 0; j < Ser.get(i-1).VM_Names.size(); j++) {
+                out += ' ';
+                out += Ser.get(i-1).VM_Names.get(j);
+                out += ' ';
+                out += itostr(Ser.get(i-1).Nums.get(j));
+//				ArrayList<Integer> aa = Ser.get(i-1).Nums;
+                System.out.println(out);
+            }
+            out += '\n';
+        }
+        return out;
+    }
+
+    static ArrayList<Integer> update_mark(ArrayList<Integer> mark){
+        int temp;
+        if (mark.size() == 1) {
+            return mark;
+        }
+        for (int i = 0; i < mark.size(); i++) {
+            for (int j = 0; j < mark.size()-i-1; j++) {
+                if (mark.get(j) > mark.get(j+1)) {
+                    temp = mark.get(j);
+                    mark.set(j, mark.get(j+1));
+                    mark.set(j+1, mark.get(j));
+                }
+            }
+        }
+        return mark;
+    }
+
+    static int get_num(server sa, flavor fla){
+        int temp, temp0, temp1;
+        temp1 = sa.S_Memory / fla.VM_Memory;
+        temp0 = sa.S_CPU_kernels / fla.VM_CPU_Kernel;
+        temp = temp0 < temp1?temp0 : temp1;
+        temp = temp < fla.VM_Amounts ? temp : fla.VM_Amounts;
+        if (temp==fla.VM_Amounts)
+            flags2 = false;
+        else
+            flags2 = true;
+        return temp;
+    }
+
+    static int distribute(int num)
+    {
+        int num1 = num;
+        int numbers=0;
+        Ser.add(create_Sa());
+
+        int[][][] dp= new int[VM_Type_Amounts+1][Sas.S_CPU_kernels+1][Sas.S_Memory+1];
+        for (int i=1; i<=VM_Type_Amounts; i++)
+        {
+            for (int j=Flavors.get(i-1).VM_CPU_Kernel; j<=Sas.S_CPU_kernels;j++)
+            {
+                for (int k=Flavors.get(i-1).VM_Memory; k<=Sas.S_Memory;k++)
+                {
+
+                    dp[i][j][k] = dp[i-1][j][k];
+                    for (int num2=1; num2<= Flavors.get(i-1).VM_Amounts; num2++)
+                    {
+                        if ((num2*Flavors.get(i-1).VM_CPU_Kernel<=j)&& (num2*Flavors.get(i-1).VM_Memory<=k))
+                        {
+                            int w = Math.abs(Sas.S_CPU_kernels*Flavors.get(i-1).VM_Memory-Sas.S_Memory*Flavors.get(i-1).VM_CPU_Kernel);
+//                            System.out.println(Sas.S_CPU_kernels);
+                            if (dp[i][j][k]<(dp[i-1][j-num2*Flavors.get(i-1).VM_CPU_Kernel][k-num2*Flavors.get(i-1).VM_Memory]+num2*w))
+                            {
+                                dp[i][j][k]=(dp[i-1][j-num2*Flavors.get(i-1).VM_CPU_Kernel][k-num2*Flavors.get(i-1).VM_Memory]+num2*w);
+                            }
+
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
+
+
+                }
+            }
+        }
+        int j = Sas.S_CPU_kernels;
+        int k = Sas.S_Memory;
+        for (int i = VM_Type_Amounts; i>0; i--)
+        {
+//            System.out.println(dp[i][j][k]);
+            if (dp[i][j][k] > dp[i-1][j][k])
+            {
+                for (int num2 = 1;( num2 * Flavors.get(i-1).VM_CPU_Kernel <= j) && (num2 * Flavors.get(i-1).VM_Memory <= k); num2++)
+                {
+                    int w = (int)Math.sqrt(Math.pow(Sas.S_CPU_kernels*Flavors.get(i-1).VM_Memory,2)+Math.pow(Sas.S_Memory*Flavors.get(i-1).VM_CPU_Kernel,2));
+                    if (dp[i][j][k] == (dp[i-1][j-num2*Flavors.get(i-1).VM_CPU_Kernel][k-num2*Flavors.get(i-1).VM_Memory]+num2*w))
+                    {
+//                        System.out.println("进来了");
+                        push_flavor(Flavors.get(i-1), Ser.get(num1),num2);
+                        j=j-num2*Flavors.get(i-1).VM_CPU_Kernel;
+                        k=k-num2*Flavors.get(i-1).VM_Memory;
+                        break;
+                    }
+                }
+            }
+            numbers = numbers + Flavors.get(i-1).VM_Amounts;
+        }
+//        System.out.println(Flavors.get(1).VM_Memory);
+        if (numbers>0)
+        {
+            return (distribute(num1+1));
+        }
+        return 0;
+    }
+    static void predict(char[][] data2, int data_num){
+        pre_intervel = get_data_intervel(Start, Stop, true);
+        int days[] = {pre_intervel, pre_intervel, pre_intervel, pre_intervel, pre_intervel,
+                pre_intervel, pre_intervel, pre_intervel, pre_intervel, pre_intervel,
+                pre_intervel, pre_intervel, pre_intervel, pre_intervel, pre_intervel};
+        ArrayList<Integer> Num = new ArrayList<Integer>();
+        int k;
+        for (int j = 0; j < VM_Type_Amounts; j++) {
+            Num.add(0);
+            k = get_index(Flavors.get(j).VM_Name, true);
+            for (int i = 0; i < days[k]; i++) {
+                Num.set(j, Num.get(j)+Data.get(j).get(data_intervel-i));
+            }
+        }
+        double n;
+        for (int i = 0; i < VM_Type_Amounts; i++) {
+            n = ar[get_index(Flavors.get(i).VM_Name, true)];
+//			Flavors.get(i).VM_Amounts = (int)(Num.get(i)*n);
+            flavor tempFlavor = Flavors.get(i);
+            tempFlavor.VM_Amounts = (int)(Num.get(i)*n);
+            Flavors.set(i, tempFlavor);
+            Pre_VM_Amounts += Flavors.get(i).VM_Amounts;
+        }
+        Flavors2 = Flavors;
+        out += itostr(Pre_VM_Amounts);
+        out += '\n';
+        for (int i = 0; i < VM_Type_Amounts; i++) {
+            out += Flavors2.get(i).VM_Name;
+            out += ' ';
+            out += itostr(Flavors2.get(i).VM_Amounts);
+            out += '\n';
+        }
+    }
+
+    static void predict(){
+        int row = Data.size();//Data  训练数据
+        int col = Data.get(0).size();
+        pre_intervel = get_data_intervel(Start, Stop, true);
+
+        double S1[][] = new double[row][col+pre_intervel];
+        double S2[][] = new double[row][col+pre_intervel];
+        double Y[][] = new double[row][pre_intervel];
+        double sum[] = new double[row];
+        double sum1 = 0;
+        double SUM1 = 0;
+        double SUM2 = 0;
+        ArrayList<Integer> Num = new ArrayList<Integer>();
+
+        for (int i = 0; i < row; i++) {
+            int count = 0;
+            for (int j = 0; j < col; j++)
+            {
+                if (Data.get(i).get(j)>0)
+                {
+                    sum1 = sum1 + Data.get(i).get(j);
+                    count++;
+                }
+            }
+            sum1 = sum1 /count ;
+            System.out.println("sum1   " + sum1);
+            for (int j = 0; j < col; j++)
+            {
+                if (Data.get(i).get(j) >= (sum1 * 4 ))
+                {
+                    Data.get(i).set(j, Data.get(i).get(j)/4);
+                }
+            }
+
+            double y1 = Data.get(i).get(0);
+            double y2 = Data.get(i).get(1);
+            double y3 = Data.get(i).get(2);
+            double s0 = (y1+y2+y3)/3;
+//            double lastIndex = Data.get(i).get(0);
+//            double lastSecIndex = Data.get(i).get(0);
+
+            S1[i][0] = arf*Data.get(i).get(0)+(1-arf)*s0;
+            S2[i][0] = S1[i][0];
+
+            for (int j = 1; j < col; j++) {
+                S1[i][j] = arf*Data.get(i).get(j) + (1-arf)*S1[i][j-1];
+                S2[i][j] = arf*S1[i][j] + (1-arf)*S2[i][j-1];
+            }
+            for (int j = col-(pre_intervel); j< col ; j++)
+            {
+                SUM1 = SUM1 + S1[i][j];
+                SUM2 = SUM2 + S2[i][j];
+
+            }
+            SUM1 = SUM1 / (pre_intervel );
+            SUM2 = SUM2 / (pre_intervel );
+            double a = 2*SUM1-SUM2;
+            double b = a/(1-a)*(SUM1-SUM2);
+//			Y[i][0] = arf*Data.get(i).get(col-1) +(1-arf)*S1[i][col-1];
+            Y[i][0] = a + b;
+            sum[i] = Y[i][0];
+//			for (int j = col; j < (col+pre_intervel-1); j++) {
+//				S1[i][j] = arf*Y[i][j-col] + S1[i][j-1];
+//				Y[i][j-col+1] = arf*Y[i][j-col] + (1-arf)*S1[i][j];
+//				sum[i] = sum[i] + Y[i][j-col+1];
+//				sum1 = (int)(sum[i]/pre_intervel);
+//			}
+            Num.add((int)((sum[i])*(pre_intervel)));
+        }
+
+        for (int i = 0; i < VM_Type_Amounts; i++) {
+            flavor tempFlavor = Flavors.get(i);
+            tempFlavor.VM_Amounts = Num.get(i);
+            Flavors.set(i, tempFlavor);
+            Pre_VM_Amounts += Flavors.get(i).VM_Amounts;
+        }
+        Flavors2 = Flavors;
+        out += itostr(Pre_VM_Amounts);
+        out += '\n';
+        for (int i = 0; i < VM_Type_Amounts; i++) {
+            out += Flavors2.get(i).VM_Name;
+            out += ' ';
+            out += itostr(Flavors2.get(i).VM_Amounts);
+            out += '\n';
+        }
+    }
+
+    static void get_info(char info[][]){
+        int SOption[] = new int[3];
+        ArrayList<String> VM_Name = new ArrayList<String>();
+        ArrayList<Integer> VM_CPU_Kernel = new ArrayList<Integer>(), VM_Memory = new ArrayList<Integer>();
+        int i = 0, index = 0;
+        String sub = new String();
+        while (i < info[0].length && info[0][i] != '\r') {
+            if (info[0][i] == ' ') {
+                SOption[index] = strtoi(sub);
+//				System.out.println(SOption[index]);
+                sub = "";
+                index++;
+                i++;
+                continue;
+            }
+            sub = sub + info[0][i];
+            i++;
+        }
+//		for (int j = 0; j < info[0].length; j++) {
+//			if (info[0][i] != '\r') {
+//				if (info[0][i] == ' ') {
+//					SOption[index] = strtoi(sub);
+//					sub = "";
+//					index++;
+//					i++;
+//					continue;
+//				}
+//				sub = sub + info[0][i];
+//				i++;
+//			}
+//		}
+        i = 0;
+        SOption[index] = strtoi(sub);
+        sub = "";
+        while (i < info[2].length && info[2][i] != '\r') {
+            sub = sub + info[2][i];
+//			System.out.println(sub);
+            i++;
+        }
+//		for (int j = 0; j < info[2].length; j++) {
+//			if (info[2][i] != '\r') {
+//				sub = sub + info[2][i];
+//				i++;
+//			}
+//		}
+        i = 0;
+        VM_Type_Amounts = strtoi(sub);
+        sub = "";
+        for (int j = 0; j < VM_Type_Amounts; j++){
+            index = 0;
+            i = 0;
+            while (i<info[j+3].length && info[j+3][i] != '\r') {
+                if (info[j+3][i] == ' ') {
+                    if (index %3 == 0) {
+                        VM_Name.add(sub);
+                    }
+                    else if (index % 3 == 1) {
+                        VM_CPU_Kernel.add(strtoi(sub));
+                    }
+                    sub = "";
+                    index++;
+                    i++;
+                    continue;
+                }
+                sub = sub + info[j+3][i];
+//				System.out.println(sub);
+                i++;
+            }
+            VM_Memory.add(strtoi(sub)/1024);
+            sub = "";
+        }
+        for (i = 0; i < 3; i++) {
+            sub = sub + info[4+VM_Type_Amounts][i];
+        }
+        Option = sub;
+        sub = "";
+
+        for (int j = 0; j < 2; j++) {
+            i = 0;
+            index = 0;
+            date temp = new date();
+            while (info[6+j+VM_Type_Amounts][i] != ' ') {
+                if (info[6+j+VM_Type_Amounts][i] == '-') {
+                    if (index % 3 == 0) {
+                        temp.year = strtoi(sub);
+                    }
+                    else if (index % 3 == 1) {
+                        temp.month = strtoi(sub);
+                    }
+                    sub = "";
+                    index++;
+                    i++;
+                    continue;
+                }
+                sub = sub + info[6+j+VM_Type_Amounts][i];
+                i++;
+            }
+            temp.day = strtoi(sub);
+            sub = "";
+            if (j == 0) {
+                Start = temp;
+            }
+            else {
+                Stop = temp;
+            }
+        }
+        Sas.S_CPU_kernels = SOption[0];
+        Sas.S_Memory = SOption[1];
+        Sas.S_Harddesk = SOption[2];
+        for (i = 0; i < VM_Type_Amounts; i++) {
+            flavor temp = new flavor();
+            temp.VM_Name = VM_Name.get(i);
+            temp.VM_CPU_Kernel = VM_CPU_Kernel.get(i);
+            temp.VM_Memory = VM_Memory.get(i);
+            Flavors.add(temp);
+        }
+    }
+
+    static void get_data(char data[][], int data_num){
+        String start_name, stop_name;
+        date start_date, stop_date;
+        start_name = get_line_name(data[0]);
+        start_date = get_line_date(data[0]);
+        stop_name = get_line_name(data[data_num-1]);
+        stop_date = get_line_date(data[data_num-1]);
+        data_intervel = get_data_intervel(start_date, stop_date, false);
+        ArrayList<Integer> temp = new ArrayList<Integer>();
+        ArrayList<Integer> temp1 = new ArrayList<Integer>();
+        for (int i = 0; i <= data_intervel; i++) {
+            temp.add(0);
+        }
+        for (int i = 0; i < VM_Type_Amounts; i++) {
+//			Data.add(temp);
+            Data.add(new ArrayList<Integer>(temp));
+        }
+        int a = 0, b = 0;
+        for (int i = 0; i < data_num; i++) {
+            stop_name = get_line_name(data[i]);
+            stop_date = get_line_date(data[i]);
+            a = get_index(stop_name, false);
+            b = get_data_intervel(start_date, stop_date, false);
+            if (a != -1) {
+//				Data.get(a).set(b, Data.get(a).get(b)+1);
+                temp1 = Data.get(a);
+                temp1.set(b, Data.get(a).get(b)+1);
+                Data.set(a, temp1);
+            }
+        }
+    }
+
+    static String get_line_name(char dataline[]){
+        String str = new String();
+        int i = 0;
+        int index = 0;
+        while (dataline[i] != '\r') {
+            if (dataline[i] == '\t') {
+                if (index % 2 == 0) {
+                    str = "";
+                    i++;
+                    index++;
+                    continue;
+                }
+                else {
+                    locate = i+1;
+                    break;
+                }
+            }
+            str = str + dataline[i];
+            i++;
+        }
+        return str;
+    }
+
+    static date get_line_date(char[] dataline){
+        int i = locate;
+        int index = 0;
+        date result = new date();
+        String temp = new String();
+        while (dataline[i] != ' ') {
+            if (dataline[i]=='-') {
+                if (index % 3 == 0) {
+                    result.year = strtoi(temp);
+                }
+                else if (index % 3 == 1) {
+                    result.month = strtoi(temp);
+                }
+                temp = "";
+                index++;
+                i++;
+                continue;
+            }
+            temp = temp + dataline[i];
+            i++;
+        }
+        result.day = strtoi(temp);
+        temp = "";
+        return result;
+    }
+
+    static int strtoi(String sub){
+        int i = 0;
+        int result = 0;
+        while (i<sub.length() &&  sub.charAt(i) != '\0') {   //疑问内容
+            result = result * 10;
+            result += (sub.charAt(i)-'0');
+            i++;
+        }
+//		for (int i = 0; i < sub.length(); i++) {
+//			if (sub.charAt(i) != '\0') {
+//				result = result * 10;
+//				result += (sub.charAt(i)-'0');
+//			}
+//		}
+        return result;
+    }
+
+    static String itostr(int num){
+        String result = new String();
+        if (num==0) {
+            result = result + '0';
+        }
+        else {
+            int i = 0, b = num;
+            ArrayList<Integer> temp = new ArrayList<Integer>();
+
+            while (b>0) {
+                i++;
+                temp.add(b%10);
+                b = b/10;
+            }
+            for (int j = i-1; j>=0; j--) {
+                result = result + (char)('0'+temp.get(j));
+            }
+        }
+        return result;
+    }
+
+    static server create_Sa(){
+        server server = new server();
+        server.S_CPU_kernels = Sas.S_CPU_kernels;
+        server.S_Harddesk = Sas.S_Harddesk;
+        server.S_Memory = Sas.S_Memory;
+        server_num ++;
+        return server;
+    }
+
+    static void sorted (server sa){
+        ArrayList<Integer> temp = new ArrayList<Integer>();
+        int temp0;
+        String temp1;
+        if (sa.VM_Names.size()==1) {
+            return;
+        }
+        else {
+            for(int i=0; i<sa.VM_Names.size(); i++){
+                temp.add(get_index(sa.VM_Names.get(i), true));
+            }
+            for (int i = 0; i < sa.VM_Names.size()-1; i++) {
+                for (int j = 0; j < sa.VM_Names.size()-i-1; j++) {
+                    if (temp.get(j)>temp.get(j+1)) {
+                        temp1 = sa.VM_Names.get(j);
+                        sa.VM_Names.set(j, sa.VM_Names.get(j+1));
+                        sa.VM_Names.set(j+1, temp1);
+                        temp1 = "";
+                        temp0 = sa.Nums.get(j);
+                        sa.Nums.set(j, sa.Nums.get(j+1));
+                        sa.Nums.set(j+1, temp0);
+                        temp0 = temp.get(j);
+                        temp.set(j, temp.get(j+1));
+                        temp.set(j+1, temp.get(j));
+                    }
+                }
+            }
+        }
+    }
+
+    static ArrayList<flavor> sorted(ArrayList<flavor> Fla){
+        if (Option.equals("CPU")) {
+            flavor temp;
+            for (int i = 0; i < VM_Type_Amounts-1; i++) {
+                for (int j = 0; j < VM_Type_Amounts-i-1; j++) {
+                    if (Fla.get(j).VM_CPU_Kernel <= Fla.get(j+1).VM_CPU_Kernel) {
+                        temp = Fla.get(j);
+                        Fla.set(j, Fla.get(j+1));
+                        Fla.set(j+1, temp);
+//						System.out.println(Fla.get(j+1).VM_Amounts);
+                    }
+                }
+            }
+        }
+        else {
+            flavor temp ;
+            for (int i = 0; i < VM_Type_Amounts-1; i++) {
+                for (int j = 0; j < VM_Type_Amounts-i-1; j++) {
+                    if (Fla.get(j).VM_Memory <= Fla.get(j+1).VM_Memory) {
+                        temp = Fla.get(j);
+                        Fla.set(j, Fla.get(j+1));
+                        Fla.set(j+1, temp);
+                    }
+                }
+            }
+        }
+        return Fla;
+    }
+
+    static void push_flavor(flavor Flavor, server Sa, int opt){
+        if (opt==0) {
+            flags = false;
+            return;
+        }
+        if (Sa.S_CPU_kernels-Flavor.VM_CPU_Kernel*opt >= 0 && Sa.S_Memory-Flavor.VM_Memory*opt >= 0) {
+            Sa.S_CPU_kernels = Sa.S_CPU_kernels - Flavor.VM_CPU_Kernel*opt;
+            Sa.S_Memory = Sa.S_Memory - Flavor.VM_Memory*opt;
+            Flavor.VM_Amounts = Flavor.VM_Amounts-opt;
+
+            boolean flag = true;
+            for (int i = 0; i < Sa.VM_Names.size(); i++) {
+                if (Sa.VM_Names.get(i).equals(Flavor.VM_Name)) {
+                    Sa.Nums.set(i, Sa.Nums.get(i)+opt);
+                    flag = false;
+                    break;
+                }
+            }
+            if(flag){
+                Sa.VM_Names.add(Flavor.VM_Name);
+                Sa.Nums.add(opt);
+            }
+            flags = false;
+        }
+        else {
+            flags = true;
+        }
+    }
+
+    static int get_index(String str, boolean option){
+        if(option){
+            String temp = "flavor";
+            int i;
+            for(i=0; i<15; i++){
+                String temString = temp+itostr(Number[i]);
+                if (str.equals(temString)) {
+                    break;
+                }
+            }
+            return i;
+        }
+        else {
+            int i;
+            for (i = 0; i < VM_Type_Amounts; i++) {
+                String teString = Flavors.get(i).VM_Name;
+                if (str.equals(teString)) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+    }
+
+    static int get_data_intervel(date start, date stop, boolean option){
+        if (option) {
+            if (start.year == 2016) {
+                if (start.month == stop.month) {
+                    return (stop.day - start.day);
+                }
+                else {
+                    return (stop.day + days2[start.month-1]-start.day);
+                }
+            }
+            else {
+                if (start.month==stop.month) {
+                    return (stop.day - start.day);
+                }
+                else {
+                    return (stop.day+days1[start.month-1]-start.day);
+                }
+            }
+        }
+        else {
+            if (start.year == stop.year) {
+                int temp = 0;
+                if (start.year % 4 == 0) {
+                    if ((stop.month-start.month)==0) {
+                        return (stop.day-start.day);
+                    }
+                    else {
+                        for (int i = 0; i < stop.month-start.month-1; i++) {
+                            temp += days2[start.month+1];
+                        }
+                        return (temp+stop.day+days2[start.month-1]-start.day);
+                    }
+                }
+                else {
+                    if ((stop.month - start.month)==0) {
+                        return (stop.day - start.day);
+                    }
+                    else {
+                        for (int i = 0; i < stop.month-start.month-1; i++) {
+                            temp += days1[start.month+i];
+                        }
+                        return (temp+stop.day+days1[start.month-1]-start.day);
+                    }
+                }
+            }
+            else {
+                int temp0 = 0, temp1 = 0, temp2 = 0;
+                for (int i = 0; i < stop.year-start.year-1; i++) {
+                    temp0 += days3[start.year%4+i];
+                }
+                for (int i = start.month; i < 12; i++) {
+                    if (start.year%4 == 0) {
+                        temp1 += days2[i];
+                    }
+                    else {
+                        temp1 += days1[i];
+                    }
+                }
+                for (int i = 0; i < stop.month-1; i++) {
+                    if (stop.year%4 == 0) {
+                        temp1 += days2[i];
+                    }
+                    else {
+                        temp1 += days1[i];
+                    }
+                }
+                if (start.year % 4 == 0) {
+                    temp2 = days2[start.month-1]-start.day+stop.day;
+                }
+                else {
+                    temp2 = days1[start.month-1]-start.day+stop.day;
+                }
+                return (temp0+temp1+temp2);
+            }
+        }
+    }
+
+}
